@@ -16,7 +16,8 @@ const db = require('./db');
    ۱) تنظیمات
    ===================================================================== */
 
-const TOKEN = process.env.BOT_TOKEN;
+const TOKEN = '8931143472:AAGUeeBhjIg0gNW4ljbQZCc5YBESLdrYhVY';
+
 const OWNER_ID = Number(process.env.OWNER_ID || 8942987641);
 const PORT = Number(process.env.PORT || 10000);
 const CHALLENGE_SECONDS = Number(process.env.CHALLENGE_SECONDS || 120);
