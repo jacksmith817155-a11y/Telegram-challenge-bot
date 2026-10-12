@@ -5,13 +5,13 @@ const TelegramBot = require('node-telegram-bot-api');
 const db = require('./db');
 
 // ---------- config ----------
-const TOKEN = process.env.BOT_TOKEN;
+const TOKEN = 'توکن_ربات_خود_را_اینجا_بگذارید';
 const OWNER_ID = Number(process.env.OWNER_ID || 8942987641);
 const PORT = Number(process.env.PORT || 10000);
 const CHALLENGE_SECONDS = Number(process.env.CHALLENGE_SECONDS || 120);
 
 if (!TOKEN) {
-  console.error('BOT_TOKEN is not set. Add it in Render environment variables.');
+  console.error('BOT_TOKEN is not set.');
   process.exit(1);
 }
 
