@@ -1,11 +1,14 @@
 'use strict';
 
 /* =====================================================================
-   Telegram Challenge Bot - نسخه ۳
+   Telegram Challenge Bot - نسخه ۴
    ---------------------------------------------------------------------
-   - توکن فقط از متغیر محیطی BOT_TOKEN خوانده می‌شود (داخل کد نگذارید).
-   - پنل مدیریت، اشتراک، بن، آمار گروه‌ها.
-   - چالش‌های گروه با قوانین امتیازدهی مشخص برای هر بازی.
+   - توکن فقط از متغیر محیطی BOT_TOKEN خوانده می‌شود.
+   - پنل مدیریت، اشتراک، بن، آمار کامل گروه‌ها.
+   - ۶ بازی: بسکتبال، فوتبال، تاس، بولینگ، دارت، کازینو.
+   - ادمین: تعداد برنده، مدت زمان (یا پایان دستی).
+   - امتیاز لحظه‌ای با ریپلای روی پیام کاربر.
+   - پیام برنده برای هر نفر و جدول نفرات ۱ تا ۵ در پایان.
    ===================================================================== */
 
 const http = require('http');
@@ -20,7 +23,6 @@ const TOKEN = '8931143472:AAGUeeBhjIg0gNW4ljbQZCc5YBESLdrYhVY';
 
 const OWNER_ID = Number(process.env.OWNER_ID || 8942987641);
 const PORT = Number(process.env.PORT || 10000);
-const CHALLENGE_SECONDS = Number(process.env.CHALLENGE_SECONDS || 120);
 // اگر تلگرام رنگ دکمه‌ها را نشان نداد، در Render متغیر COLORED_BUTTONS=off بگذارید
 const COLORED_BUTTONS = process.env.COLORED_BUTTONS !== 'off';
 
@@ -37,18 +39,18 @@ let BOT_USERNAME = '';
    ===================================================================== */
 
 const inputState = new Map(); // ورودی متنی مالک در انتظار
-const setups = new Map();     // chatId -> چالشی که ادمین در حال تنظیم آن است
+const setups = new Map();     // chatId -> چالشی که ادمین در حال تنظیم است
 const sessions = new Map();   // chatId -> چالش در حال اجرا
 
 /* =====================================================================
    ۳) بازی‌ها و قوانین امتیازدهی
    ---------------------------------------------------------------------
    scoring:
-     goal  -> هر گل (مقدار مشخص در goalValues) = ۱ امتیاز.
-              برنده کسی است که بیشترین امتیاز را دارد.
-     exact -> الگو. فقط کسی که دقیقاً عدد/ست الگو را بیاورد امتیاز ۱ می‌گیرد.
-              برنده‌ها به ترتیب زمان ثبت انتخاب می‌شوند.
-     rank  -> عدد تاس بیشترین امتیاز است. بیشترین عدد برنده است.
+     goal  -> گل زدن. هر گل (مقدار در goalValues) = ۱ امتیاز.
+              بیشترین امتیاز برنده است؛ تساوی با زودتر بودن حل می‌شود.
+     exact -> الگو. فقط کسی که دقیقاً الگو (عدد یا ست) را بیاورد امتیاز می‌گیرد.
+              برندگان بر اساس زودترین ثبت انتخاب می‌شوند.
+     rank  -> امتیاز = عدد خروجی تلگرام. بیشترین عدد برنده است.
    ===================================================================== */
 
 const GAMES = {
@@ -56,24 +58,24 @@ const GAMES = {
     emoji: '🏀',
     name: 'بسکتبال',
     scoring: 'goal',
-    goalValues: [4, 5], // مقادیر گل در بسکتبال تلگرام (قابل تغییر)
+    goalValues: [4, 5],
+    unit: 'گل',
     rules:
-      'توپ را داخل حلقه بیندازید.\n' +
+      '• توپ را داخل حلقه بیندازید.\n' +
       '• هر گل <b>۱ امتیاز</b> دارد.\n' +
-      '• بیشترین امتیاز برنده است.\n' +
-      '• در تساوی امتیاز، کسی که زودتر شوت زده برنده است.\n' +
+      '• بیشترین امتیاز برنده است؛ در تساوی، زودترین شوت برنده است.\n' +
       '• هر نفر فقط <b>یک بار</b> شوت می‌زند.',
   },
   football: {
     emoji: '⚽',
     name: 'فوتبال',
     scoring: 'goal',
-    goalValues: [3, 4, 5], // مقادیر گل در فوتبال تلگرام (قابل تغییر)
+    goalValues: [3, 4, 5],
+    unit: 'گل',
     rules:
-      'توپ را به دروازه بزنید.\n' +
+      '• توپ را به دروازه بزنید.\n' +
       '• هر گل <b>۱ امتیاز</b> دارد.\n' +
-      '• بیشترین امتیاز برنده است.\n' +
-      '• در تساوی امتیاز، کسی که زودتر شوت زده برنده است.\n' +
+      '• بیشترین امتیاز برنده است؛ در تساوی، زودترین شوت برنده است.\n' +
       '• هر نفر فقط <b>یک بار</b> شوت می‌زند.',
   },
   dice: {
@@ -81,19 +83,18 @@ const GAMES = {
     name: 'تاس',
     scoring: 'exact',
     rules:
-      'ادمین یک عدد (۱ تا ۶) را به عنوان <b>الگو</b> انتخاب می‌کند.\n' +
-      '• هرکس دقیقاً همان عدد را بیاورد امتیاز می‌گیرد.\n' +
+      '• ادمین یک عدد (۱ تا ۶) را به عنوان <b>الگو</b> انتخاب می‌کند.\n' +
+      '• هرکس دقیقاً همان عدد را بیاورد برنده است.\n' +
       '• برندگان بر اساس زودترین ثبت انتخاب می‌شوند.\n' +
-      '• هر نفر فقط <b>یک بار</b> می‌تواند تاس بیندازد.',
+      '• هر نفر فقط <b>یک بار</b> تاس می‌اندازد.',
   },
   bowling: {
     emoji: '🎳',
     name: 'بولینگ',
     scoring: 'rank',
     rules:
-      'توپ بولینگ را بیندازید.\n' +
       '• عدد <b>۶</b> یعنی <b>استرایک</b> (همه کیل‌ها افتاده‌اند).\n' +
-      '• بیشترین عدد برنده است.\n' +
+      '• امتیاز شما همان عدد خروجی است؛ بیشترین امتیاز برنده است.\n' +
       '• در تساوی، زودتر شوت زده برنده است.\n' +
       '• هر نفر فقط <b>یک بار</b> شوت می‌زند.',
   },
@@ -102,9 +103,8 @@ const GAMES = {
     name: 'دارت',
     scoring: 'rank',
     rules:
-      'دارت بزنید.\n' +
       '• عدد <b>۶</b> یعنی <b>بول</b> (وسط تخته).\n' +
-      '• بیشترین عدد برنده است.\n' +
+      '• امتیاز شما همان عدد خروجی است؛ بیشترین امتیاز برنده است.\n' +
       '• در تساوی، زودتر پرتاب کرده برنده است.\n' +
       '• هر نفر فقط <b>یک بار</b> پرتاب می‌کند.',
   },
@@ -113,14 +113,14 @@ const GAMES = {
     name: 'کازینو',
     scoring: 'exact',
     rules:
-      'ادمین یک <b>ست</b> را انتخاب می‌کند: ۷۷۷، لیمو، BAR، انگور یا رندوم.\n' +
+      '• ادمین یک <b>ست</b> را انتخاب می‌کند: ۷۷۷، لیمو، BAR، انگور یا رندوم.\n' +
       '• هرکس دقیقاً همان ست را بیاورد برنده است.\n' +
-      '• در حالت رندوم، ادمین یک 🎰 می‌فرستد و الگو همان عدد می‌شود.\n' +
+      '• در حالت رندوم، ادمین یک 🎰 می‌فرستد و همان عدد الگو می‌شود.\n' +
       '• برندگان بر اساس زودترین ثبت انتخاب می‌شوند.',
   },
 };
 
-// ست‌های کازینو (طبق نگاشت جامعه: 1=BAR، 22=انگور، 43=لیمو، 64=777)
+// ست‌های کازینو (نگاشت جامعه: 1=BAR، 22=انگور، 43=لیمو، 64=777)
 const SLOT_SETS = {
   seven: { label: '🎰 ست 777', value: 64 },
   lemon: { label: '🍋 ست لیمو', value: 43 },
@@ -128,8 +128,17 @@ const SLOT_SETS = {
   grape: { label: '🍇 ست انگور', value: 22 },
   random: { label: '🔀 ست رندوم', value: null },
 };
-
 const SLOT_NAMES = { 64: '777 🎰', 43: 'لیمو 🍋', 22: 'انگور 🍇', 1: 'BAR 🔴' };
+
+// مدت زمان‌های قابل انتخاب توسط ادمین (ثانیه). 0 = پایان دستی
+const DURATIONS = [
+  { sec: 30, label: '30 ثانیه' },
+  { sec: 60, label: '1 دقیقه' },
+  { sec: 120, label: '2 دقیقه' },
+  { sec: 180, label: '3 دقیقه' },
+  { sec: 300, label: '5 دقیقه' },
+  { sec: 0, label: 'پایان دستی توسط ادمین' },
+];
 
 const ADMIN_RE = /^(menu:|sub:|ban:|stats:|groups:|quick:)/;
 const EMPTY_KB = { inline_keyboard: [] };
@@ -158,8 +167,8 @@ const canUse = (id) => !db.isBanned(id) && (isOwner(id) || db.isSubscribed(id));
 const fullName = (u) => [u.first_name, u.last_name].filter(Boolean).join(' ') || u.username || String(u.id);
 const fmtDate = (ts) => new Date(ts).toLocaleString('fa-IR', { timeZone: 'Asia/Tehran' });
 const subLabel = (days) => (days === 0 ? 'نامحدود' : `${days} روزه`);
+const durLabel = (sec) => (sec === 0 ? 'پایان دستی' : `${sec} ثانیه`);
 
-// حذف رنگ دکمه‌ها (برای تلاش دوم اگر تلگرام استایل را نپذیرفت)
 function stripStyles(extra) {
   if (!extra || !extra.reply_markup) return extra;
   const rm = JSON.parse(JSON.stringify(extra.reply_markup));
@@ -167,7 +176,7 @@ function stripStyles(extra) {
   return { ...extra, reply_markup: rm };
 }
 
-// ارسال مطمئن: اگر ارسال با HTML یا رنگ دکمه شکست خورد، نسخه ساده را می‌فرستد
+// ارسال مطمئن: اگر با HTML یا رنگ شکست خورد، نسخه ساده را می‌فرستد
 async function sendSafe(chatId, text, extra = {}) {
   try {
     return await bot.sendMessage(chatId, text, { parse_mode: 'HTML', ...extra });
@@ -182,7 +191,6 @@ async function sendSafe(chatId, text, extra = {}) {
   }
 }
 
-// ویرایش مطمئن پیام
 async function show(chatId, mid, text, markup) {
   try {
     return await bot.editMessageText(text, {
@@ -222,7 +230,7 @@ async function canManageChallenge(chatId, uid) {
    ===================================================================== */
 
 const ADMIN_TEXT = '👑 <b>پنل مدیریت</b>\nیکی از گزینه‌ها را انتخاب کنید.';
-const CHALLENGE_TEXT = '🎮 <b>پنل چالش‌ها</b>\nیک بازی را انتخاب کنید.\nبرای دیدن قوانین امتیازدهی روی «📖 قوانین» بزنید.';
+const CHALLENGE_TEXT = '🎮 <b>پنل چالش‌ها</b>\nیک بازی را انتخاب کنید.';
 
 const adminMenu = () =>
   kb([
@@ -246,8 +254,8 @@ const challengeMenu = () =>
     [B('🏀 بسکتبال', 'ch:basketball'), B('⚽ فوتبال', 'ch:football')],
     [B('🎲 تاس', 'ch:dice'), B('🎳 بولینگ', 'ch:bowling')],
     [B('🎯 دارت', 'ch:darts'), B('🎰 کازینو', 'ch:casino')],
-    [B('📖 قوانین و امتیازدهی', 'ch:rules')],
-    [R('🔴 لغو چالش فعال', 'ch:cancel')],
+    [B('📖 قوانین همه بازی‌ها', 'ch:rules')],
+    [R('🔴 لغو تنظیمات / چالش فعال', 'ch:cancel')],
   ]);
 
 const casinoMenu = () =>
@@ -272,8 +280,23 @@ const winnersMenu = () =>
     [B('🔙 بازگشت', 'ch:menu')],
   ]);
 
+const durationMenu = () =>
+  kb([
+    [G('⏱ 30 ثانیه', 'du:30'), G('⏱ 1 دقیقه', 'du:60')],
+    [B('⏱ 2 دقیقه', 'du:120'), B('⏱ 3 دقیقه', 'du:180')],
+    [B('⏱ 5 دقیقه', 'du:300')],
+    [R('✋ پایان دستی توسط ادمین', 'du:0')],
+    [B('🔙 بازگشت', 'ch:menu')],
+  ]);
+
+const liveControls = () =>
+  kb([
+    [R('⏹ پایان همین الان', 'live:end')],
+    [B('📊 وضعیت فعلی', 'live:status')],
+  ]);
+
 /* =====================================================================
-   ۶) توابع متنی برای ادمین و آمار
+   ۶) متن‌های ادمین
    ===================================================================== */
 
 function subListText() {
@@ -304,33 +327,40 @@ function groupsListText() {
   );
 }
 
-// نتیجه یک بازیکن به صورت متن خوانا
+/* =====================================================================
+   ۷) برچسب نتیجه هر بازیکن
+   ===================================================================== */
+
 function resultLabel(game, p) {
   switch (game) {
     case 'basketball':
     case 'football':
-      return p.score ? '⚽ گل' : 'بدون گل';
+      return p.score ? `${p.score} گل` : 'بدون گل';
     case 'dice':
-      return `🎲 عدد ${p.value}`;
+      return `عدد ${p.value}`;
     case 'casino':
-      return `🎰 ${SLOT_NAMES[p.value] || 'کد ' + p.value}`;
+      return SLOT_NAMES[p.value] || `کد ${p.value}`;
     case 'bowling':
-      return p.value === 6 ? '🎳 استرایک!' : `🎳 ${p.value} از ۶`;
+      return p.value === 6 ? `استرایک (${p.value})` : `${p.value} از ۶`;
     case 'darts':
-      return p.value === 6 ? '🎯 بول!' : `🎯 ${p.value} از ۶`;
+      return p.value === 6 ? `بول (${p.value})` : `${p.value} از ۶`;
     default:
       return `امتیاز ${p.value}`;
   }
 }
 
-// آمار کامل یک گروه
+/* =====================================================================
+   ۸) آمار گروه
+   ===================================================================== */
+
 function groupStatsText(chatId) {
   const g = db.data.groups[chatId];
   const list = db.challengesOf(chatId);
 
   const perGame = {};
-  const wins = {};
-  const plays = {};
+  const winsAll = {};
+  const winsByGame = {};
+  const playsAll = {};
   const diceTargets = {};
   const casinoSets = {};
 
@@ -338,16 +368,20 @@ function groupStatsText(chatId) {
     perGame[c.game] = (perGame[c.game] || 0) + 1;
     if (c.game === 'dice' && c.target) diceTargets[c.target] = (diceTargets[c.target] || 0) + 1;
     if (c.game === 'casino' && c.target) casinoSets[c.target] = (casinoSets[c.target] || 0) + 1;
+
     for (const w of c.winners || []) {
-      wins[w.id] = { name: w.name, count: (wins[w.id] ? wins[w.id].count : 0) + 1 };
+      winsAll[w.id] = { name: w.name, count: (winsAll[w.id] ? winsAll[w.id].count : 0) + 1 };
+      winsByGame[c.game] = winsByGame[c.game] || {};
+      const cur = winsByGame[c.game][w.id];
+      winsByGame[c.game][w.id] = { name: w.name, count: (cur ? cur.count : 0) + 1 };
     }
     for (const p of c.results || []) {
-      plays[p.id] = { name: p.name, count: (plays[p.id] ? plays[p.id].count : 0) + 1 };
+      playsAll[p.id] = { name: p.name, count: (playsAll[p.id] ? playsAll[p.id].count : 0) + 1 };
     }
   }
 
-  const topWinners = Object.entries(wins).sort((a, b) => b[1].count - a[1].count).slice(0, 5);
-  const topPlayers = Object.entries(plays).sort((a, b) => b[1].count - a[1].count).slice(0, 5);
+  const topWinners = Object.entries(winsAll).sort((a, b) => b[1].count - a[1].count).slice(0, 5);
+  const topPlayers = Object.entries(playsAll).sort((a, b) => b[1].count - a[1].count).slice(0, 5);
 
   let text = `📊 <b>آمار گروه ${esc(g ? g.title : chatId)}</b>\n`;
   text += `🎮 کل چالش‌های برگزار شده: <b>${list.length}</b>\n\n`;
@@ -362,26 +396,29 @@ function groupStatsText(chatId) {
     ? topPlayers.map(([id, v], i) => `${i + 1}. ${userLink(id, v.name)} — ${v.count} شرکت`).join('\n')
     : 'هنوز شرکت‌کننده‌ای ثبت نشده.';
 
-  text += '\n\n🎯 <b>آمار هر بازی</b>\n';
-  text += Object.keys(perGame).length
-    ? Object.entries(perGame)
-        .map(([k, n]) => `• ${GAMES[k] ? GAMES[k].emoji + ' ' + GAMES[k].name : k}: ${n} بار`)
-        .join('\n')
-    : 'بازی‌ای ثبت نشده.';
+  text += '\n\n🎯 <b>آمار هر بازی و قهرمان آن</b>\n';
+  const gameKeys = Object.keys(GAMES);
+  for (const key of gameKeys) {
+    const count = perGame[key] || 0;
+    const champ = winsByGame[key]
+      ? Object.entries(winsByGame[key]).sort((a, b) => b[1].count - a[1].count)[0]
+      : null;
+    text += `• ${GAMES[key].emoji} ${GAMES[key].name}: ${count} بار`;
+    text += champ ? ` | 🏅 قهرمان: ${userLink(champ[0], champ[1].name)} (${champ[1].count} برد)\n` : '\n';
+  }
 
   if (Object.keys(diceTargets).length) {
-    text += '\n\n🎲 <b>الگوهای تاس استفاده شده</b>\n';
-    text += Object.entries(diceTargets).map(([n, c]) => `• عدد ${n}: ${c} بار`).join('\n');
+    text += '\n🎲 <b>الگوهای تاس استفاده شده</b>\n';
+    text += Object.entries(diceTargets).map(([n, c]) => `• عدد ${n}: ${c} بار`).join('\n') + '\n';
   }
-
   if (Object.keys(casinoSets).length) {
-    text += '\n\n🎰 <b>ست‌های کازینو استفاده شده</b>\n';
+    text += '\n🎰 <b>ست‌های کازینو استفاده شده</b>\n';
     text += Object.entries(casinoSets)
       .map(([v, c]) => `• ${SLOT_NAMES[v] || 'کد ' + v}: ${c} بار`)
-      .join('\n');
+      .join('\n') + '\n';
   }
 
-  text += '\n\n📜 <b>آخرین ۸ چالش</b>\n';
+  text += '\n📜 <b>آخرین ۸ چالش</b>\n';
   const recent = list.slice(-8).reverse();
   text += recent.length
     ? recent
@@ -398,7 +435,7 @@ function groupStatsText(chatId) {
 }
 
 /* =====================================================================
-   ۷) پیام‌های خصوصی
+   ۹) پیام‌های خصوصی
    ===================================================================== */
 
 async function sendHome(chatId, uid) {
@@ -575,7 +612,7 @@ async function onPrivateCallback(q) {
 }
 
 /* =====================================================================
-   ۸) منطق چالش
+   ۱۰) منطق امتیاز و رتبه‌بندی
    ===================================================================== */
 
 // امتیاز یک انتخاب بر اساس قانون بازی
@@ -586,7 +623,7 @@ function scoreFor(session, value) {
   return value; // rank
 }
 
-// رتبه‌بندی نهایی
+// رتبه‌بندی لحظه‌ای و نهایی
 function rankPlayers(session) {
   const g = GAMES[session.game];
   const list = [...session.players.values()];
@@ -599,16 +636,41 @@ function rankPlayers(session) {
   return list.sort((a, b) => b.value - a.value || a.time - b.time);
 }
 
-function challengeRulesLine(session) {
+// متن امتیاز لحظه‌ای که زیر پیام کاربر ریپلای می‌شود
+function liveText(session, p, pos) {
   const g = GAMES[session.game];
-  if (g.scoring === 'exact') {
-    return `🎯 الگو: <b>${esc(session.label)}</b>\nهرکس دقیقاً همین را بیاورد برنده است.`;
+  let res;
+  switch (session.game) {
+    case 'basketball':
+    case 'football':
+      res = p.score ? `🥅 گل! +۱ امتیاز` : '❌ گل نشد (۰ امتیاز)';
+      break;
+    case 'dice':
+      res = p.score
+        ? `✅ عدد ${p.value} — الگو درست بود!`
+        : `❌ عدد ${p.value} آمد؛ الگو ${esc(session.label)} نبود`;
+      break;
+    case 'casino':
+      res = p.score
+        ? `✅ ${SLOT_NAMES[p.value] || p.value} — الگو درست بود!`
+        : `❌ ${SLOT_NAMES[p.value] || 'کد ' + p.value} آمد؛ الگو نبود`;
+      break;
+    case 'bowling':
+      res = p.value === 6 ? `🎳 استرایک! امتیاز ${p.value}` : `🎳 امتیاز ${p.value} از ۶`;
+      break;
+    case 'darts':
+      res = p.value === 6 ? `🎯 بول! امتیاز ${p.value}` : `🎯 امتیاز ${p.value} از ۶`;
+      break;
+    default:
+      res = `امتیاز ${p.value}`;
   }
-  if (g.scoring === 'goal') {
-    return '⚽ هر گل ۱ امتیاز؛ بیشترین امتیاز برنده است.';
-  }
-  return '🏆 بیشترین عدد برنده است؛ در تساوی زودترها برنده‌اند.';
+  const posText = pos ? `🏅 رتبه فعلی شما: ${pos}` : 'ℹ️ فعلاً خارج از برندگان';
+  return `${g.emoji} <b>${esc(p.name)}</b>\n${res}\n⏱ زمان ثبت: ${p.elapsed.toFixed(2)} ثانیه از شروع\n${posText}`;
 }
+
+/* =====================================================================
+   ۱۱) چالش: شروع، زنده، پایان
+   ===================================================================== */
 
 function clearSession(chatId) {
   const s = sessions.get(chatId);
@@ -618,7 +680,7 @@ function clearSession(chatId) {
   return s;
 }
 
-async function startChallenge(chatId, setup, winners) {
+async function startChallenge(chatId, setup) {
   const g = GAMES[setup.game];
   const session = {
     chatId,
@@ -626,39 +688,59 @@ async function startChallenge(chatId, setup, winners) {
     emoji: g.emoji,
     target: setup.target,
     label: setup.label || '',
-    winners,
+    winners: setup.winners,
+    durationSec: setup.durationSec,
+    adminId: setup.adminId,
     players: new Map(),
     startedAt: Date.now(),
     timers: [],
   };
   sessions.set(chatId, session);
 
-  // یادآورها و پایان خودکار
-  const total = CHALLENGE_SECONDS * 1000;
-  session.timers.push(
-    setTimeout(() => sendSafe(chatId, `⏳ نیمی از زمان گذشت! هنوز می‌توانید ${g.emoji} بفرستید.`), total / 2)
-  );
-  if (CHALLENGE_SECONDS > 30) {
+  if (session.durationSec > 0) {
+    const total = session.durationSec * 1000;
+    if (total > 20000) {
+      session.timers.push(setTimeout(() => sendSafe(chatId, `⏳ نصف زمان گذشت! هنوز می‌توانید ${g.emoji} بفرستید.`), total / 2));
+    }
+    if (total > 15000) {
+      session.timers.push(setTimeout(() => sendSafe(chatId, '⚠️ ۱۰ ثانیه تا پایان چالش مانده است!'), total - 10000));
+    }
     session.timers.push(
-      setTimeout(() => sendSafe(chatId, '⚠️ ۱۰ ثانیه تا پایان چالش مانده است!'), total - 10000)
+      setTimeout(() => finishChallenge(chatId, 'time').catch((e) => console.error('finish error:', e)), total)
     );
   }
-  session.timers.push(
-    setTimeout(() => finishChallenge(chatId).catch((e) => console.error('finish error:', e)), total)
-  );
+
+  let rulesShort = g.rules;
+  if (g.scoring === 'exact') rulesShort = `🎯 الگو: <b>${esc(session.label)}</b>\n` + rulesShort;
 
   return sendSafe(
     chatId,
     `🏁 <b>چالش ${g.emoji} ${g.name} شروع شد</b>\n` +
-      `👥 تعداد برنده: <b>${winners}</b>\n` +
-      `${challengeRulesLine(session)}\n` +
-      `⏱ مهلت: ${CHALLENGE_SECONDS} ثانیه\n\n` +
-      `📖 <b>قوانین:</b>\n${g.rules}\n\n` +
-      `ایموجی ${g.emoji} را بفرستید تا شرکت کنید.`
+      `👥 تعداد برنده: <b>${session.winners}</b>\n` +
+      `⏱ مدت: <b>${durLabel(session.durationSec)}</b>\n\n` +
+      `📖 <b>قوانین و امتیازدهی:</b>\n${rulesShort}\n\n` +
+      `ایموجی ${g.emoji} را بفرستید تا امتیازتان ثبت و به پیامتان پاسخ داده شود.`,
+    { reply_markup: liveControls() }
   );
 }
 
-async function finishChallenge(chatId) {
+function winnerText(session, p, rank, challengeId) {
+  const g = GAMES[session.game];
+  const medals = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣'];
+  const uname = p.username ? `@${esc(p.username)}` : 'بدون یوزرنیم';
+  return (
+    `🏆 <b>تبریک ${esc(p.name)}! شما برنده شدید</b> ${medals[rank - 1] || '🏅'}\n\n` +
+    `🎮 بازی: ${g.emoji} ${g.name}\n` +
+    `🔢 رتبه: <b>${rank}</b>\n` +
+    `📊 نتیجه: <b>${resultLabel(session.game, p)}</b>\n` +
+    `⏱ زمان ثبت: ${p.elapsed.toFixed(2)} ثانیه از شروع\n` +
+    `🆔 آیدی: <code>${p.id}</code> | ${uname}\n` +
+    `📅 تاریخ: ${fmtDate(p.time)}\n` +
+    `🔖 کد چالش: <code>${esc(challengeId)}</code>`
+  );
+}
+
+async function finishChallenge(chatId, reason = 'manual') {
   const s = clearSession(chatId);
   if (!s) return;
 
@@ -666,52 +748,64 @@ async function finishChallenge(chatId) {
   const ranked = rankPlayers(s);
   const winners = ranked.slice(0, s.winners);
   const top5 = ranked.slice(0, 5);
+  const endedAt = Date.now();
+  const challengeId = `${chatId}-${endedAt}`;
   const group = db.data.groups[chatId];
-  const results = [...s.players.values()].map((p) => ({
-    id: p.id,
-    name: p.name,
-    value: p.value,
-    score: p.score,
-  }));
 
   db.addChallenge({
-    id: `${chatId}-${Date.now()}`,
+    id: challengeId,
     chatId,
     chatTitle: group ? group.title : String(chatId),
     game: s.game,
-    date: Date.now(),
+    date: endedAt,
+    startedAt: s.startedAt,
+    durationSec: s.durationSec,
+    endReason: reason,
     participants: s.players.size,
     target: s.target,
     label: s.label,
-    winners: winners.map((p) => ({ id: p.id, name: p.name, value: p.value })),
-    top5: top5.map((p) => ({ id: p.id, name: p.name, value: p.value })),
-    results,
+    winnersCount: s.winners,
+    winners: winners.map((p) => ({ id: p.id, name: p.name, username: p.username, value: p.value, score: p.score, elapsed: p.elapsed })),
+    top5: top5.map((p) => ({ id: p.id, name: p.name, value: p.value, score: p.score })),
+    results: [...s.players.values()].map((p) => ({ id: p.id, name: p.name, value: p.value, score: p.score, elapsed: p.elapsed })),
   });
+
+  const reasonText = reason === 'time' ? '⏱ زمان چالش تمام شد' : '✋ توسط ادمین پایان یافت';
 
   if (!winners.length) {
     return sendSafe(
       chatId,
-      `⏹ چالش ${g.emoji} ${g.name} بدون برنده پایان یافت.\n` +
-        `👥 شرکت‌کنندگان: ${s.players.size}`
+      `⏹ چالش ${g.emoji} ${g.name} بدون برنده پایان یافت.\n${reasonText}\n👥 شرکت‌کنندگان: ${s.players.size}\n🔖 کد چالش: <code>${challengeId}</code>`
     );
   }
 
   const medals = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣'];
-  const winnerLines = winners.map((p, i) => `${medals[i] || '🏅'} ${userLink(p.id, p.name)} — ${resultLabel(s.game, p)}`);
-  const topLines = top5.map((p, i) => `${i + 1}. ${esc(p.name)} — ${resultLabel(s.game, p)}`);
+  const summary =
+    `🏁 <b>پایان چالش ${g.emoji} ${g.name}</b>\n` +
+    `${reasonText}\n` +
+    `📅 تاریخ: ${fmtDate(endedAt)}\n` +
+    (s.label ? `🎯 الگو: ${esc(s.label)}\n` : '') +
+    `👥 کل شرکت‌کنندگان: ${s.players.size} | 🏆 تعداد برنده: ${s.winners}\n` +
+    `🔖 کد چالش: <code>${challengeId}</code>\n\n` +
+    `<b>📊 نفرات ۱ تا ۵:</b>\n` +
+    top5
+      .map((p, i) => `${medals[i]} ${userLink(p.id, p.name)} — ${resultLabel(s.game, p)} (${p.elapsed.toFixed(2)}s)`)
+      .join('\n') +
+    `\n\n<b>🎉 برندگان:</b> ${winners.map((p) => userLink(p.id, p.name)).join('، ')}`;
 
-  return sendSafe(
-    chatId,
-    `🏆 <b>نتایج چالش ${g.emoji} ${g.name}</b>\n` +
-      `📅 تاریخ: ${fmtDate(Date.now())}\n` +
-      (s.label ? `🎯 الگو: ${esc(s.label)}\n` : '') +
-      `👥 کل شرکت‌کنندگان: ${s.players.size}\n\n` +
-      `<b>🎉 برندگان:</b>\n${winnerLines.join('\n')}\n\n` +
-      `<b>📊 نفرات ۱ تا ۵:</b>\n${topLines.join('\n')}`
-  );
+  await sendSafe(chatId, summary);
+
+  // پیام اختصاصی برای هر برنده، ریپلای روی پیام خودش
+  for (let i = 0; i < winners.length; i++) {
+    const p = winners[i];
+    await sendSafe(chatId, winnerText(s, p, i + 1, challengeId), { reply_to_message_id: p.msgId });
+  }
 }
 
-// دریافت تاس/ایموجی ورزشی از اعضا
+/* =====================================================================
+   ۱۲) دریافت ایموجی اعضا
+   ===================================================================== */
+
 function handleDice(msg) {
   const chatId = msg.chat.id;
   const user = msg.from;
@@ -730,19 +824,34 @@ function handleDice(msg) {
   }
 
   const s = sessions.get(chatId);
-  if (!s || d.emoji !== s.emoji || s.players.has(user.id)) return;
+  if (!s || d.emoji !== s.emoji) return;
 
-  s.players.set(user.id, {
+  if (s.players.has(user.id)) {
+    return sendSafe(chatId, '⚠️ شما قبلاً شرکت کرده‌اید؛ هر نفر فقط یک بار مجاز است.', {
+      reply_to_message_id: msg.message_id,
+    });
+  }
+
+  const now = Date.now();
+  const p = {
     id: user.id,
     name: fullName(user),
+    username: user.username || null,
     value: d.value,
     score: scoreFor(s, d.value),
-    time: Date.now(),
-  });
+    time: now,
+    elapsed: (now - s.startedAt) / 1000,
+    msgId: msg.message_id,
+  };
+  s.players.set(user.id, p);
+
+  const ranked = rankPlayers(s);
+  const pos = ranked.findIndex((x) => x.id === user.id) + 1;
+  return sendSafe(chatId, liveText(s, p, pos), { reply_to_message_id: msg.message_id });
 }
 
 /* =====================================================================
-   ۹) کلیک‌های گروه
+   ۱۳) کلیک‌های گروه
    ===================================================================== */
 
 async function onGroupCallback(q) {
@@ -756,18 +865,38 @@ async function onGroupCallback(q) {
   }
   await bot.answerCallbackQuery(q.id).catch(() => {});
 
+  // ---- کنترل چالش در حال اجرا ----
+  if (d === 'live:end') {
+    if (!sessions.has(chatId)) return sendSafe(chatId, 'ℹ️ چالش فعالی وجود ندارد.');
+    return finishChallenge(chatId, 'manual');
+  }
+
+  if (d === 'live:status') {
+    const s = sessions.get(chatId);
+    if (!s) return sendSafe(chatId, 'ℹ️ چالش فعالی وجود ندارد.');
+    const ranked = rankPlayers(s).slice(0, 5);
+    const lines = ranked.length
+      ? ranked.map((p, i) => `${i + 1}. ${esc(p.name)} — ${resultLabel(s.game, p)} (${p.elapsed.toFixed(2)}s)`).join('\n')
+      : 'هنوز امتیازی ثبت نشده.';
+    return sendSafe(
+      chatId,
+      `📊 <b>وضعیت فعلی ${GAMES[s.game].emoji} ${GAMES[s.game].name}</b>\n` +
+        `👥 شرکت‌کنندگان: ${s.players.size}\n\n${lines}`
+    );
+  }
+
   if (d === 'ch:menu') return show(chatId, mid, CHALLENGE_TEXT, challengeMenu());
 
   if (d === 'ch:rules') {
     const lines = Object.values(GAMES).map((g) => `${g.emoji} <b>${g.name}</b>\n${g.rules}`);
-    return sendSafe(chatId, '📖 <b>قوانین و امتیازدهی بازی‌ها</b>\n\n' + lines.join('\n\n'));
+    return sendSafe(chatId, '📖 <b>قوانین و امتیازدهی شش بازی</b>\n\n' + lines.join('\n\n'));
   }
 
   if (d === 'ch:cancel') {
     const s = clearSession(chatId);
     setups.delete(chatId);
-    if (!s) return sendSafe(chatId, 'ℹ️ چالش فعالی وجود ندارد.');
-    return sendSafe(chatId, '🔴 چالش فعال لغو شد.');
+    if (!s) return sendSafe(chatId, 'ℹ️ تنظیمات یا چالش فعالی وجود ندارد.');
+    return sendSafe(chatId, '🔴 چالش فعال لغو شد. امتیازهای ثبت‌شده ذخیره نشدند.');
   }
 
   if (d.startsWith('ch:')) {
@@ -776,7 +905,7 @@ async function onGroupCallback(q) {
     if (sessions.has(chatId)) {
       return sendSafe(chatId, '⏳ یک چالش در حال اجراست. ابتدا آن را تمام یا لغو کنید.');
     }
-    setups.set(chatId, { game, adminId: uid, target: null, label: '', waitTemplate: false });
+    setups.set(chatId, { game, adminId: uid, target: null, label: '', waitTemplate: false, winners: 0, durationSec: 0 });
 
     if (game === 'casino') return show(chatId, mid, '🎰 یک ست کازینو انتخاب کنید:', casinoMenu());
     if (game === 'dice') return show(chatId, mid, '🎲 عدد الگوی تاس را انتخاب کنید:', diceMenu());
@@ -816,6 +945,7 @@ async function onGroupCallback(q) {
     return show(chatId, mid, `✅ ${set.label} انتخاب شد.\n🏆 تعداد برنده را انتخاب کنید:`, winnersMenu());
   }
 
+  // ادمین تعداد برنده را انتخاب می‌کند
   if (d.startsWith('win:')) {
     const setup = setups.get(chatId);
     if (!setup) return sendSafe(chatId, '❌ تنظیمات پیدا نشد. دوباره از /challenge شروع کنید.');
@@ -823,19 +953,25 @@ async function onGroupCallback(q) {
     if (g.scoring === 'exact' && setup.target === null) {
       return sendSafe(chatId, '❌ ابتدا الگو را مشخص کنید.');
     }
+    setup.winners = Number(d.slice(4));
+    return show(chatId, mid, `✅ ${setup.winners} برنده ثبت شد.\n⏱ مدت زمان چالش را انتخاب کنید:`, durationMenu());
+  }
+
+  // ادمین مدت زمان را انتخاب می‌کند و چالش شروع می‌شود
+  if (d.startsWith('du:')) {
+    const setup = setups.get(chatId);
+    if (!setup || !setup.winners) return sendSafe(chatId, '❌ تنظیمات پیدا نشد. دوباره از /challenge شروع کنید.');
     if (sessions.has(chatId)) return sendSafe(chatId, '⏳ یک چالش در حال اجراست.');
 
-    const winners = Number(d.slice(4));
+    setup.durationSec = Number(d.slice(3));
     setups.delete(chatId);
-
-    // اول پیام شروع را می‌فرستیم تا مطمئن باشیم کاربر اطلاع می‌گیرد
-    await startChallenge(chatId, setup, winners);
-    return show(chatId, mid, `✅ چالش ${g.emoji} ${g.name} با ${winners} برنده شروع شد.`, EMPTY_KB);
+    await show(chatId, mid, `✅ چالش ${GAMES[setup.game].emoji} ${GAMES[setup.game].name} تنظیم و شروع شد.`, EMPTY_KB);
+    return startChallenge(chatId, setup);
   }
 }
 
 /* =====================================================================
-   ۱۰) پیام‌های گروه
+   ۱۴) پیام‌های گروه
    ===================================================================== */
 
 async function onGroup(msg) {
@@ -858,7 +994,7 @@ async function onGroup(msg) {
 }
 
 /* =====================================================================
-   ۱۱) رویدادها
+   ۱۵) رویدادها
    ===================================================================== */
 
 bot.on('message', async (msg) => {
@@ -900,7 +1036,7 @@ bot.on('polling_error', (e) => {
 });
 
 /* =====================================================================
-   ۱۲) راه‌اندازی
+   ۱۶) راه‌اندازی
    ===================================================================== */
 
 bot
