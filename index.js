@@ -168,6 +168,8 @@ const fullName = (u) => [u.first_name, u.last_name].filter(Boolean).join(' ') ||
 const fmtDate = (ts) => new Date(ts).toLocaleString('fa-IR', { timeZone: 'Asia/Tehran' });
 const subLabel = (days) => (days === 0 ? 'نامحدود' : `${days} روزه`);
 const durLabel = (sec) => (sec === 0 ? 'پایان دستی' : `${sec} ثانیه`);
+// حذف کاراکتر انتخاب‌گر (FE0F) تا ⚽ و ⚽️ یکسان شوند
+const normEmoji = (e) => String(e || '').replace(/\uFE0F/g, '').trim();
 
 function stripStyles(extra) {
   if (!extra || !extra.reply_markup) return extra;
@@ -254,7 +256,7 @@ const challengeMenu = () =>
     [B('🏀 بسکتبال', 'ch:basketball'), B('⚽ فوتبال', 'ch:football')],
     [B('🎲 تاس', 'ch:dice'), B('🎳 بولینگ', 'ch:bowling')],
     [B('🎯 دارت', 'ch:darts'), B('🎰 کازینو', 'ch:casino')],
-    [B('📖 قوانین همه بازی‌ها', 'ch:rules')],
+    [B('📜 تاریخچه چالش‌ها', 'ch:history'), B('📖 قوانین همه بازی‌ها', 'ch:rules')],
     [R('🔴 لغو تنظیمات / چالش فعال', 'ch:cancel')],
   ]);
 
@@ -438,6 +440,26 @@ function groupStatsText(chatId) {
    ۹) پیام‌های خصوصی
    ===================================================================== */
 
+// تاریخچه: برای هر چالش، تاریخ، نفر اول و نفرات ۱ تا ۵
+function historyText(chatId, limit = 8) {
+  const list = db.challengesOf(chatId).slice(-limit).reverse();
+  if (!list.length) return '📭 هنوز چالشی در این گروه ثبت نشده است.';
+  const blocks = list.map((c) => {
+    const g = GAMES[c.game] || { emoji: '🎮', name: c.game };
+    const first = (c.winners || [])[0];
+    const top = (c.top5 || [])
+      .map((p, i) => `${i + 1}) ${esc(p.name)} (${resultLabel(c.game, p)})`)
+      .join(' | ') || '—';
+    return (
+      `${g.emoji} <b>${g.name}</b> — ${fmtDate(c.date)}\n` +
+      `🥇 نفر اول: ${first ? `${userLink(first.id, first.name)} (<code>${first.id}</code>)` : 'ندارد'}\n` +
+      `📊 نفرات ۱ تا ۵: ${top}\n` +
+      `👥 شرکت‌کنندگان: ${c.participants} | 🔖 <code>${esc(c.id)}</code>`
+    );
+  });
+  return '📜 <b>تاریخچه چالش‌ها</b>\n\n' + blocks.join('\n\n');
+}
+
 async function sendHome(chatId, uid) {
   if (isOwner(uid)) {
     return sendSafe(chatId, ADMIN_TEXT, { reply_markup: adminMenu() });
@@ -604,9 +626,18 @@ async function onPrivateCallback(q) {
       return show(chatId, mid, '🏢 گروه مورد نظر را برای دیدن آمار انتخاب کنید:', kb(rows));
     }
     default:
+      if (d.startsWith('stats:h:')) {
+        const hid = d.slice('stats:h:'.length);
+        return show(chatId, mid, historyText(hid, 8), kb([[B('🔙 آمار گروه', `stats:g:${hid}`)]]));
+      }
       if (d.startsWith('stats:g:')) {
         const gid = d.slice('stats:g:'.length);
-        return show(chatId, mid, groupStatsText(gid), kb([[B('🔙 لیست گروه‌ها', 'stats:groups')]]));
+        return show(
+          chatId,
+          mid,
+          groupStatsText(gid),
+          kb([[B('📜 تاریخچه چالش‌ها', `stats:h:${gid}`)], [B('🔙 لیست گروه‌ها', 'stats:groups')]])
+        );
       }
   }
 }
@@ -665,7 +696,7 @@ function liveText(session, p, pos) {
       res = `امتیاز ${p.value}`;
   }
   const posText = pos ? `🏅 رتبه فعلی شما: ${pos}` : 'ℹ️ فعلاً خارج از برندگان';
-  return `${g.emoji} <b>${esc(p.name)}</b>\n${res}\n⏱ زمان ثبت: ${p.elapsed.toFixed(2)} ثانیه از شروع\n${posText}`;
+  return `✅ <b>${esc(p.name)}</b>، امتیاز شما ثبت شد\n${g.emoji} ${res}\n⏱ زمان ثبت: ${p.elapsed.toFixed(2)} ثانیه از شروع\n${posText}`;
 }
 
 /* =====================================================================
@@ -823,8 +854,10 @@ function handleDice(msg) {
     });
   }
 
+  console.log(`DICE chat=${chatId} user=${user.id} emoji=${normEmoji(d.emoji)} value=${d.value}`);
   const s = sessions.get(chatId);
-  if (!s || d.emoji !== s.emoji) return;
+  if (!s) return;
+  if (normEmoji(d.emoji) !== normEmoji(s.emoji)) return;
 
   if (s.players.has(user.id)) {
     return sendSafe(chatId, '⚠️ شما قبلاً شرکت کرده‌اید؛ هر نفر فقط یک بار مجاز است.', {
@@ -886,6 +919,8 @@ async function onGroupCallback(q) {
   }
 
   if (d === 'ch:menu') return show(chatId, mid, CHALLENGE_TEXT, challengeMenu());
+
+  if (d === 'ch:history') return sendSafe(chatId, historyText(chatId, 8));
 
   if (d === 'ch:rules') {
     const lines = Object.values(GAMES).map((g) => `${g.emoji} <b>${g.name}</b>\n${g.rules}`);
